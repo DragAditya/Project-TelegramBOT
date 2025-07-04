@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  zultra-bot:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    env_file:
+      - ../.env
+    volumes:
+      - ../logs:/app/logs
+      - ../zultra_bot.db:/app/zultra_bot.db  # For SQLite persistence
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - zultra-network
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: zultra_bot
+      POSTGRES_USER: zultra
+      POSTGRES_PASSWORD: zultra_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - zultra-network
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - zultra-network
+
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - "8080:8080"
+    networks:
+      - zultra-network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  zultra-network:
+    driver: bridge
