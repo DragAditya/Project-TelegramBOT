@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Optional, List
 from sqlalchemy import (
     Column, Integer, BigInteger, String, Text, DateTime, Boolean, 
-    Float, ForeignKey, Index, JSON, LargeBinary
+    Float, ForeignKey, Index, JSON, LargeBinary, create_engine
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
@@ -41,13 +41,6 @@ class User(Base):
     last_seen = Column(DateTime(timezone=True), default=func.now())
     created_at = Column(DateTime(timezone=True), default=func.now())
     updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
-    
-    # Relationships
-    groups = relationship("UserGroup", back_populates="user")
-    api_keys = relationship("APIKey", back_populates="user")
-    usage_stats = relationship("Usage", back_populates="user")
-    warnings = relationship("Warning", back_populates="user")
-    afk_status = relationship("AFKUser", back_populates="user", uselist=False)
     
     def __repr__(self):
         return f"<User(id={self.id}, username={self.username})>"
@@ -91,13 +84,6 @@ class Group(Base):
     created_at = Column(DateTime(timezone=True), default=func.now())
     updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
     
-    # Relationships
-    members = relationship("UserGroup", back_populates="group")
-    api_keys = relationship("APIKey", back_populates="group")
-    usage_stats = relationship("Usage", back_populates="group")
-    warnings = relationship("Warning", back_populates="group")
-    banned_users = relationship("BannedUser", back_populates="group")
-    
     def __repr__(self):
         return f"<Group(id={self.id}, title={self.title})>"
 
@@ -112,10 +98,6 @@ class UserGroup(Base):
     role = Column(String(20), default="member")  # owner, admin, member
     joined_at = Column(DateTime(timezone=True), default=func.now())
     is_active = Column(Boolean, default=True)
-    
-    # Relationships
-    user = relationship("User", back_populates="groups")
-    group = relationship("Group", back_populates="members")
     
     def __repr__(self):
         return f"<UserGroup(user_id={self.user_id}, group_id={self.group_id}, role={self.role})>"
@@ -140,11 +122,6 @@ class APIKey(Base):
     
     created_at = Column(DateTime(timezone=True), default=func.now())
     updated_at = Column(DateTime(timezone=True), default=func.now(), onupdate=func.now())
-    
-    # Relationships
-    user = relationship("User", back_populates="api_keys")
-    group = relationship("Group", back_populates="api_keys")
-    usage_stats = relationship("Usage", back_populates="api_key")
     
     __table_args__ = (
         Index("idx_api_keys_user_provider", "user_id", "provider"),
@@ -181,11 +158,6 @@ class Usage(Base):
     
     created_at = Column(DateTime(timezone=True), default=func.now())
     
-    # Relationships
-    user = relationship("User", back_populates="usage_stats")
-    group = relationship("Group", back_populates="usage_stats")
-    api_key = relationship("APIKey", back_populates="usage_stats")
-    
     __table_args__ = (
         Index("idx_usage_user_date", "user_id", "created_at"),
         Index("idx_usage_group_date", "group_id", "created_at"),
@@ -206,9 +178,6 @@ class AFKUser(Base):
     reason = Column(Text, nullable=True)
     afk_since = Column(DateTime(timezone=True), default=func.now())
     
-    # Relationships
-    user = relationship("User", back_populates="afk_status")
-    
     def __repr__(self):
         return f"<AFKUser(user_id={self.user_id}, group_id={self.group_id})>"
 
@@ -226,10 +195,6 @@ class Warning(Base):
     is_active = Column(Boolean, default=True)
     
     created_at = Column(DateTime(timezone=True), default=func.now())
-    
-    # Relationships
-    user = relationship("User", back_populates="warnings")
-    group = relationship("Group", back_populates="warnings")
     
     __table_args__ = (
         Index("idx_warnings_user_group", "user_id", "group_id"),
@@ -254,9 +219,6 @@ class BannedUser(Base):
     is_active = Column(Boolean, default=True)
     
     created_at = Column(DateTime(timezone=True), default=func.now())
-    
-    # Relationships
-    group = relationship("Group", back_populates="banned_users")
     
     __table_args__ = (
         Index("idx_banned_users_user_group", "user_id", "group_id"),
