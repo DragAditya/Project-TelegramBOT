@@ -1,10 +1,10 @@
 """
 Logging middleware for Zultra Telegram Bot.
-Handles comprehensive logging of all bot interactions.
+Provides comprehensive request/response logging and monitoring.
 """
 
 import time
-from typing import Optional
+from typing import Dict, Any, Optional
 from telegram import Update
 from telegram.ext import ContextTypes
 from loguru import logger
@@ -17,284 +17,150 @@ class LoggingMiddleware(BaseMiddleware):
     
     def __init__(self):
         super().__init__("LoggingMiddleware")
-        self.log_level = "INFO"
+        self.request_counter = 0
+        self.slow_requests = []
+        self.slow_request_threshold = 5.0  # seconds
     
-    async def process_update(
-        self, 
-        update: Update, 
-        context: ContextTypes.DEFAULT_TYPE
-    ) -> bool:
-        """Process and log the update."""
-        if not self.enabled:
-            return True
+    async def _process_update(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+        """Log incoming requests."""
+        self.request_counter += 1
         
-        start_time = time.time()
+        # Extract request information
+        request_info = self._extract_request_info(update)
         
-        # Store start time in context for response time calculation
-        context.user_data = context.user_data or {}
-        context.user_data['_request_start'] = start_time
+        # Store timing information
+        context.bot_data['request_start_time'] = time.time()
+        context.bot_data['request_id'] = self.request_counter
         
-        await self._log_incoming_update(update, context)
+        # Log the request
+        logger.info(
+            f"[{self.request_counter}] {request_info['type']}: {request_info['summary']}",
+            extra={
+                'request_id': self.request_counter,
+                'user_id': request_info.get('user_id'),
+                'chat_id': request_info.get('chat_id'),
+                'command': request_info.get('command'),
+                'chat_type': request_info.get('chat_type')
+            }
+        )
         
         return True
     
-    async def post_process(
-        self, 
-        update: Update, 
-        context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
-        """Log the completion of update processing."""
-        if not self.enabled:
-            return
+    async def _post_process(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Log request completion and timing."""
+        start_time = context.bot_data.get('request_start_time')
+        request_id = context.bot_data.get('request_id')
         
-        # Calculate response time
-        start_time = context.user_data.get('_request_start', time.time())
-        response_time = (time.time() - start_time) * 1000  # Convert to milliseconds
-        
-        await self._log_response(update, context, response_time)
-    
-    async def _log_incoming_update(
-        self, 
-        update: Update, 
-        context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
-        """Log incoming update details."""
-        user_id = self.get_user_id(update)
-        chat_id = self.get_chat_id(update)
-        
-        # Determine update type
-        update_type = self._get_update_type(update)
-        
-        # Get message content (truncated for logging)
-        content = self._get_update_content(update)
-        
-        # Get user info
-        user_info = self._get_user_info(update)
-        
-        # Get chat info
-        chat_info = self._get_chat_info(update)
-        
-        # Log the incoming request
-        logger.info(
-            f"Incoming {update_type}",
-            extra={
-                "update_type": update_type,
-                "user_id": user_id,
-                "chat_id": chat_id,
-                "content": content,
-                "user_info": user_info,
-                "chat_info": chat_info,
-                "update_id": update.update_id
-            }
-        )
-    
-    async def _log_response(
-        self, 
-        update: Update, 
-        context: ContextTypes.DEFAULT_TYPE,
-        response_time: float
-    ) -> None:
-        """Log response details."""
-        user_id = self.get_user_id(update)
-        chat_id = self.get_chat_id(update)
-        
-        logger.info(
-            f"Request processed in {response_time:.2f}ms",
-            extra={
-                "user_id": user_id,
-                "chat_id": chat_id,
-                "response_time_ms": response_time,
-                "update_id": update.update_id
-            }
-        )
-    
-    def _get_update_type(self, update: Update) -> str:
-        """Determine the type of update."""
-        if update.message:
-            if update.message.text and update.message.text.startswith('/'):
-                return "command"
-            elif update.message.text:
-                return "text_message"
-            elif update.message.photo:
-                return "photo"
-            elif update.message.document:
-                return "document"
-            elif update.message.voice:
-                return "voice"
-            elif update.message.video:
-                return "video"
-            elif update.message.sticker:
-                return "sticker"
-            elif update.message.new_chat_members:
-                return "new_member"
-            elif update.message.left_chat_member:
-                return "left_member"
+        if start_time and request_id:
+            duration = time.time() - start_time
+            
+            # Log slow requests
+            if duration > self.slow_request_threshold:
+                self.slow_requests.append({
+                    'request_id': request_id,
+                    'duration': duration,
+                    'timestamp': time.time()
+                })
+                
+                # Keep only last 100 slow requests
+                if len(self.slow_requests) > 100:
+                    self.slow_requests.pop(0)
+                
+                logger.warning(
+                    f"[{request_id}] SLOW REQUEST: {duration:.2f}s",
+                    extra={'request_id': request_id, 'duration': duration}
+                )
             else:
-                return "message"
+                logger.debug(
+                    f"[{request_id}] Completed in {duration:.2f}s",
+                    extra={'request_id': request_id, 'duration': duration}
+                )
+    
+    def _extract_request_info(self, update: Update) -> Dict[str, Any]:
+        """Extract relevant information from update."""
+        info = {
+            'type': 'unknown',
+            'summary': 'Unknown update',
+            'user_id': None,
+            'chat_id': None,
+            'command': None,
+            'chat_type': None
+        }
+        
+        # Extract basic info
+        if update.effective_user:
+            info['user_id'] = update.effective_user.id
+        
+        if update.effective_chat:
+            info['chat_id'] = update.effective_chat.id
+            info['chat_type'] = update.effective_chat.type
+        
+        # Determine update type and extract details
+        if update.message:
+            info['type'] = 'message'
+            message = update.message
+            
+            if message.text:
+                if message.text.startswith('/'):
+                    info['type'] = 'command'
+                    info['command'] = message.text.split()[0]
+                    info['summary'] = f"Command: {info['command']}"
+                else:
+                    info['summary'] = f"Text: {message.text[:50]}..."
+            
+            elif message.photo:
+                info['type'] = 'photo'
+                info['summary'] = "Photo message"
+            
+            elif message.document:
+                info['type'] = 'document'
+                info['summary'] = f"Document: {message.document.file_name or 'Unknown'}"
+            
+            elif message.voice:
+                info['type'] = 'voice'
+                info['summary'] = "Voice message"
+            
+            elif message.video:
+                info['type'] = 'video'
+                info['summary'] = "Video message"
+            
+            elif message.sticker:
+                info['type'] = 'sticker'
+                info['summary'] = "Sticker message"
+            
+            else:
+                info['summary'] = "Message (other type)"
+        
         elif update.callback_query:
-            return "callback_query"
+            info['type'] = 'callback_query'
+            info['summary'] = f"Callback: {update.callback_query.data}"
+        
         elif update.inline_query:
-            return "inline_query"
+            info['type'] = 'inline_query'
+            info['summary'] = f"Inline query: {update.inline_query.query}"
+        
         elif update.edited_message:
-            return "edited_message"
-        elif update.channel_post:
-            return "channel_post"
-        elif update.edited_channel_post:
-            return "edited_channel_post"
-        else:
-            return "unknown"
-    
-    def _get_update_content(self, update: Update) -> Optional[str]:
-        """Get the content of the update (truncated)."""
-        content = None
+            info['type'] = 'edited_message'
+            info['summary'] = "Message edited"
         
-        if update.message:
-            if update.message.text:
-                content = update.message.text
-            elif update.message.caption:
-                content = f"[Media] {update.message.caption}"
-            else:
-                content = "[Media without caption]"
-        elif update.callback_query:
-            content = f"[Callback] {update.callback_query.data}"
-        elif update.inline_query:
-            content = f"[Inline] {update.inline_query.query}"
-        elif update.edited_message and update.edited_message.text:
-            content = f"[Edited] {update.edited_message.text}"
+        # Add user information if available
+        if update.effective_user:
+            user = update.effective_user
+            user_info = f"@{user.username}" if user.username else f"ID:{user.id}"
+            info['summary'] += f" from {user_info}"
         
-        # Truncate long content
-        if content and len(content) > 200:
-            content = content[:200] + "..."
+        return info
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get detailed logging statistics."""
+        base_stats = super().get_stats()
         
-        return content
-    
-    def _get_user_info(self, update: Update) -> Optional[dict]:
-        """Get user information from update."""
-        user = update.effective_user
-        if not user:
-            return None
+        # Add logging-specific stats
+        base_stats.update({
+            'total_requests': self.request_counter,
+            'slow_requests_count': len(self.slow_requests),
+            'slow_request_threshold': self.slow_request_threshold,
+            'recent_slow_requests': self.slow_requests[-10:] if self.slow_requests else []
+        })
         
-        return {
-            "id": user.id,
-            "username": user.username,
-            "first_name": user.first_name,
-            "last_name": user.last_name,
-            "is_bot": user.is_bot,
-            "language_code": user.language_code
-        }
-    
-    def _get_chat_info(self, update: Update) -> Optional[dict]:
-        """Get chat information from update."""
-        chat = update.effective_chat
-        if not chat:
-            return None
-        
-        chat_info = {
-            "id": chat.id,
-            "type": chat.type
-        }
-        
-        if chat.title:
-            chat_info["title"] = chat.title
-        if chat.username:
-            chat_info["username"] = chat.username
-        
-        return chat_info
-    
-    def set_log_level(self, level: str) -> None:
-        """Set the logging level."""
-        self.log_level = level.upper()
-        logger.info(f"Logging middleware level set to {self.log_level}")
-    
-    async def log_command_execution(
-        self, 
-        command: str, 
-        user_id: int, 
-        chat_id: int, 
-        success: bool = True,
-        error: Optional[str] = None
-    ) -> None:
-        """Log command execution details."""
-        if success:
-            logger.info(
-                f"Command /{command} executed successfully",
-                extra={
-                    "command": command,
-                    "user_id": user_id,
-                    "chat_id": chat_id,
-                    "success": True
-                }
-            )
-        else:
-            logger.warning(
-                f"Command /{command} failed: {error}",
-                extra={
-                    "command": command,
-                    "user_id": user_id,
-                    "chat_id": chat_id,
-                    "success": False,
-                    "error": error
-                }
-            )
-    
-    async def log_ai_request(
-        self, 
-        provider: str, 
-        model: str, 
-        user_id: int, 
-        chat_id: int,
-        tokens_used: int = 0,
-        cost: float = 0.0,
-        response_time: float = 0.0
-    ) -> None:
-        """Log AI request details."""
-        logger.info(
-            f"AI request to {provider}/{model}",
-            extra={
-                "ai_provider": provider,
-                "ai_model": model,
-                "user_id": user_id,
-                "chat_id": chat_id,
-                "tokens_used": tokens_used,
-                "cost": cost,
-                "response_time": response_time
-            }
-        )
-    
-    async def log_moderation_action(
-        self, 
-        action: str, 
-        moderator_id: int, 
-        target_user_id: int, 
-        chat_id: int,
-        reason: Optional[str] = None
-    ) -> None:
-        """Log moderation actions."""
-        logger.warning(
-            f"Moderation action: {action}",
-            extra={
-                "action": action,
-                "moderator_id": moderator_id,
-                "target_user_id": target_user_id,
-                "chat_id": chat_id,
-                "reason": reason
-            }
-        )
-    
-    async def log_security_event(
-        self, 
-        event_type: str, 
-        user_id: int, 
-        chat_id: int,
-        details: Optional[dict] = None
-    ) -> None:
-        """Log security-related events."""
-        logger.warning(
-            f"Security event: {event_type}",
-            extra={
-                "event_type": event_type,
-                "user_id": user_id,
-                "chat_id": chat_id,
-                "details": details or {}
-            }
-        )
+        return base_stats
