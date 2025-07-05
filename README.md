@@ -1,4 +1,4 @@
-# 🚀 Zultra Bot v2.0 - Production-Ready Telegram Bot
+# 🚀 Zultra Bot v2.0 - Advance Telegram Bot
 
 A bulletproof, production-ready Telegram bot with zero errors, complete error handling, clean modular architecture, and enterprise-grade features. Built for 24/7 operation on platforms like Render, Vercel, Railway, and more.
 
@@ -38,7 +38,7 @@ A bulletproof, production-ready Telegram bot with zero errors, complete error ha
 
 ### 1. One-Line Setup
 ```bash
-curl -fsSL https://raw.githubusercontent.com/your-repo/zultra-bot/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Project-TelegramBOT/main/install.sh | bash
 ```
 
 ### 2. Manual Setup
