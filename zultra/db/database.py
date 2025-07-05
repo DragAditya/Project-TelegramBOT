@@ -4,12 +4,11 @@ Handles async database operations with SQLAlchemy.
 """
 
 import asyncio
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator, Optional, Dict, Any
 from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import (
     AsyncSession, AsyncEngine, create_async_engine, async_sessionmaker
 )
-from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import text
 from loguru import logger
 
@@ -19,11 +18,11 @@ from .models import Base
 # Global variables
 engine: Optional[AsyncEngine] = None
 async_session_maker: Optional[async_sessionmaker] = None
-settings = get_settings()
 
 
 async def create_engine() -> AsyncEngine:
     """Create and configure the async database engine."""
+    settings = get_settings()
     database_url = settings.get_database_url()
     
     # Convert sync URLs to async
@@ -36,22 +35,22 @@ async def create_engine() -> AsyncEngine:
     engine_kwargs = {
         "echo": settings.is_debug,
         "future": True,
-        "pool_pre_ping": True,
     }
     
-    # Production-specific settings
-    if settings.is_production:
+    # SQLite specific settings
+    if "sqlite" in database_url:
         engine_kwargs.update({
-            "pool_size": 20,
-            "max_overflow": 30,
-            "pool_timeout": 30,
-            "pool_recycle": 3600,
+            "pool_pre_ping": True,
+            "connect_args": {"check_same_thread": False}
         })
     else:
-        # Development settings
+        # PostgreSQL settings
         engine_kwargs.update({
-            "pool_size": 5,
-            "max_overflow": 10,
+            "pool_size": 10,
+            "max_overflow": 20,
+            "pool_timeout": 30,
+            "pool_recycle": 3600,
+            "pool_pre_ping": True,
         })
     
     logger.info(f"Creating database engine for: {database_url.split('://')[0]}://...")
@@ -155,52 +154,6 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Database health check failed: {e}")
             return False
-    
-    async def backup_database(self, backup_path: str) -> bool:
-        """Create a database backup (SQLite only for now)."""
-        try:
-            if "sqlite" in settings.database_url:
-                import shutil
-                import os
-                
-                db_path = settings.database_url.replace("sqlite+aiosqlite:///", "")
-                if os.path.exists(db_path):
-                    shutil.copy2(db_path, backup_path)
-                    logger.info(f"Database backed up to: {backup_path}")
-                    return True
-            else:
-                logger.warning("Database backup not implemented for PostgreSQL")
-                return False
-        except Exception as e:
-            logger.error(f"Database backup failed: {e}")
-            return False
-    
-    async def restore_database(self, backup_path: str) -> bool:
-        """Restore database from backup (SQLite only for now)."""
-        try:
-            if "sqlite" in settings.database_url:
-                import shutil
-                import os
-                
-                db_path = settings.database_url.replace("sqlite+aiosqlite:///", "")
-                if os.path.exists(backup_path):
-                    # Close existing connections
-                    await self.close()
-                    
-                    # Restore backup
-                    shutil.copy2(backup_path, db_path)
-                    
-                    # Reinitialize
-                    await self.initialize()
-                    
-                    logger.info(f"Database restored from: {backup_path}")
-                    return True
-            else:
-                logger.warning("Database restore not implemented for PostgreSQL")
-                return False
-        except Exception as e:
-            logger.error(f"Database restore failed: {e}")
-            return False
 
 
 # Global database manager instance
@@ -208,38 +161,31 @@ db_manager = DatabaseManager()
 
 
 # Convenience functions
-async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
-    """Get database session (convenience function)."""
-    async with get_session() as session:
-        yield session
-
-
-async def execute_query(query: str, **params) -> list:
-    """Execute a raw SQL query and return results."""
-    async with get_session() as session:
-        result = await session.execute(text(query), params)
-        return result.fetchall()
-
-
-async def get_user_by_id(user_id: int) -> Optional['User']:
+async def get_user_by_id(user_id: int):
     """Get user by Telegram ID."""
     from .models import User
+    from sqlalchemy import select
     
     async with get_session() as session:
-        result = await session.get(User, user_id)
-        return result
+        result = await session.execute(
+            select(User).where(User.id == user_id)
+        )
+        return result.scalar_one_or_none()
 
 
-async def get_group_by_id(group_id: int) -> Optional['Group']:
+async def get_group_by_id(group_id: int):
     """Get group by Telegram chat ID."""
     from .models import Group
+    from sqlalchemy import select
     
     async with get_session() as session:
-        result = await session.get(Group, group_id)
-        return result
+        result = await session.execute(
+            select(Group).where(Group.id == group_id)
+        )
+        return result.scalar_one_or_none()
 
 
-async def create_or_update_user(user_data: dict) -> 'User':
+async def create_or_update_user(user_data: dict):
     """Create or update a user record."""
     from .models import User
     from sqlalchemy import select
@@ -266,7 +212,7 @@ async def create_or_update_user(user_data: dict) -> 'User':
         return user
 
 
-async def create_or_update_group(group_data: dict) -> 'Group':
+async def create_or_update_group(group_data: dict):
     """Create or update a group record."""
     from .models import Group
     from sqlalchemy import select
