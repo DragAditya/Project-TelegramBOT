@@ -16,7 +16,7 @@ pydantic-settings==2.1.0
 python-dotenv==1.0.1
 
 # Security & Encryption
-cryptography==41.0.8
+cryptography==45.0.5
 
 # AI Integration - Latest Stable
 openai==1.6.1
